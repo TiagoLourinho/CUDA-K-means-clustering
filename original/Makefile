@@ -6,7 +6,7 @@ HOST_CC_O3_FLAGS = -O3
 GPU_CC = nvcc
 GPU_CC_FLAGS = -O2 -Wno-deprecated-gpu-targets
  
-DATA_DIR = /extra/acedes/kmeans_data
+DATA_DIR = ../test_data
 
 compile_all: kmeans_host kmeans_host_O3 kmeans_gpu
 
