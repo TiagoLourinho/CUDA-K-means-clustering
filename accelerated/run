@@ -1,0 +1,2 @@
+./kmeans_host -i /extra/acedes/kmeans_data/kdd_cup 
+./kmeans_host -n 4 -i /extra/acedes/kmeans_data/kdd_cup 
