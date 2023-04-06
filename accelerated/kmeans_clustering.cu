@@ -72,12 +72,28 @@
 #define FLT_MAX 3.40282347e+38
 #endif
 
+#define THREADS_PER_BLOCK 256
+#define WARP_SIZE 32
+
 extern double wtime(void);
 
-int find_nearest_point(float *pt, /* [nfeatures] */
-                       int nfeatures,
-                       float **pts, /* [npts][nfeatures] */
-                       int npts)
+__constant__ int d_nfeatures;
+__constant__ int d_npoints;
+__constant__ int d_nclusters;
+
+/* ==================== Host util functions ==================== */
+
+int choose_number_of_blocks(int threads_per_block, int N)
+{
+    return (N + threads_per_block - 1) / threads_per_block;
+}
+
+/* ==================== Device util functions ==================== */
+
+__device__ int find_nearest_point(float *pt, /* [nfeatures] */
+                                  int nfeatures,
+                                  float *pts, /* [npts][nfeatures] */
+                                  int npts)
 {
     int index, i;
     float min_dist = FLT_MAX;
@@ -86,7 +102,7 @@ int find_nearest_point(float *pt, /* [nfeatures] */
     for (i = 0; i < npts; i++)
     {
         float dist;
-        dist = euclid_dist_2(pt, pts[i], nfeatures); /* no need square root */
+        dist = euclid_dist_2(pt, pts + i * nfeatures, nfeatures); /* no need square root */
         if (dist < min_dist)
         {
             min_dist = dist;
@@ -96,11 +112,9 @@ int find_nearest_point(float *pt, /* [nfeatures] */
     return (index);
 }
 
-/*----< euclid_dist_2() >----------------------------------------------------*/
-/* multi-dimensional spatial Euclid distance square */
-__inline float euclid_dist_2(float *pt1,
-                             float *pt2,
-                             int numdims)
+__device__ float euclid_dist_2(float *pt1,
+                               float *pt2,
+                               int numdims)
 {
     int i;
     float ans = 0.0;
@@ -109,6 +123,107 @@ __inline float euclid_dist_2(float *pt1,
         ans += (pt1[i] - pt2[i]) * (pt1[i] - pt2[i]);
 
     return (ans);
+}
+
+/* ==================== Init functions ==================== */
+
+__global__ void init_cluster_centers(float *d_clusters, float *d_feature)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int j;
+
+    if (tid < d_nclusters)
+    {
+        for (j = 0; j < d_nfeatures; j++)
+            *(d_clusters + d_nfeatures * tid + j) = *(d_feature + d_nfeatures * tid + j);
+    }
+}
+
+__global__ void init_membership(int *d_membership)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (tid < d_npoints)
+    {
+        *(d_membership + tid) = -1;
+    }
+}
+
+/* ==================== Reset functions ==================== */
+
+__global__ void reset_new_centers_len(int *d_new_centers_len)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (tid < d_nclusters)
+    {
+        *(d_new_centers_len + tid) = 0;
+    }
+}
+
+__global__ void reset_new_centers(float *d_new_centers)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int N = d_nclusters * d_nfeatures;
+
+    if (tid < N)
+    {
+        *(d_new_centers + tid) = 0.0;
+    }
+}
+
+__global__ void reset_delta(float *d_delta)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (tid == 0)
+    {
+        *(d_delta) = 0.0;
+    }
+}
+
+/* ==================== Main computational functions ==================== */
+
+__global__ void assign_membership(float *d_feature, float *d_clusters, int *d_membership, float *d_new_centers, int *d_new_centers_len, float *d_delta)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int index, j;
+
+    if (tid < d_npoints)
+    {
+        /* find the index of nestest cluster centers */
+        index = find_nearest_point(d_feature + tid, d_nfeatures, d_clusters, d_nclusters);
+
+        /* if membership changes, increase delta by 1 */
+        if (*(d_membership + tid) != index)
+            *d_delta += 1.0;
+
+        /* assign the membership to object i */
+        *(d_membership + tid) = index;
+
+        /* update new cluster centers : sum of objects located within */
+        *(d_new_centers_len + index) += 1;
+        for (j = 0; j < d_nfeatures; j++)
+            *(d_new_centers + index * d_nfeatures + j) += *(d_feature + tid * d_nfeatures + j);
+    }
+}
+
+__global__ void update_clusters(float *d_clusters, float *d_new_centers, int *d_new_centers_len)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int j;
+
+    if (tid < d_nclusters)
+    {
+        if ((*d_new_centers_len + tid) > 0)
+        {
+            for (j = 0; j < d_nfeatures; j++)
+            {
+
+                *(d_clusters + tid * d_nfeatures + j) = *(d_new_centers + tid * d_nfeatures + j) / *(d_new_centers_len + tid);
+            }
+        }
+    }
 }
 
 /*----< kmeans_clustering() >---------------------------------------------*/
@@ -120,78 +235,74 @@ float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
                           int *membership) /* out: [npoints] */
 {
 
-    int i, j, n = 0, index, loop = 0;
-    int *new_centers_len; /* [nclusters]: no. of points in each cluster */
+    int i;
     float delta;
-    float **clusters;    /* out: [nclusters][nfeatures] */
-    float **new_centers; /* [nclusters][nfeatures] */
+    float **clusters; /* out: [nclusters][nfeatures] */
 
-    /* allocate space for returning variable clusters[] */
+    /* =============== Device vars =============== */
+    int *d_membership;
+    int *d_new_centers_len; /* [nclusters]: no. of points in each cluster */
+    float *d_feature;
+    float *d_delta;
+    float *d_clusters;    /* out: [nclusters][nfeatures] */
+    float *d_new_centers; /* [nclusters][nfeatures] */
+
+    cudaMalloc((void **)d_membership, npoints * sizeof(int));
+    cudaMalloc((void **)d_new_centers_len, nclusters * sizeof(int));
+    cudaMalloc((void **)d_feature, npoints * nfeatures * sizeof(float));
+    cudaMalloc((void **)d_delta, sizeof(float));
+    cudaMalloc((void **)d_clusters, nclusters * nfeatures * sizeof(float));
+    cudaMalloc((void **)d_new_centers, nclusters * nfeatures * sizeof(float));
+
+    cudaMemcpyToSymbol(d_nfeatures, &nfeatures, sizeof(int));
+    cudaMemcpyToSymbol(d_npoints, &npoints, sizeof(int));
+    cudaMemcpyToSymbol(d_nclusters, &nclusters, sizeof(int));
+
+    for (i = 0; i < npoints; i++)
+        cudaMemcpy(d_feature + i * nfeatures, feature[i], nfeatures * sizeof(float), cudaMemcpyHostToDevice);
+
+    /* =============== allocate space for returning variable clusters[] =============== */
     clusters = (float **)malloc(nclusters * sizeof(float *));
     clusters[0] = (float *)malloc(nclusters * nfeatures * sizeof(float));
     for (i = 1; i < nclusters; i++)
         clusters[i] = clusters[i - 1] + nfeatures;
 
-    /* randomly pick cluster centers */
-    for (i = 0; i < nclusters; i++)
-    {
-        // n = (int)rand() % npoints;
-        for (j = 0; j < nfeatures; j++)
-            clusters[i][j] = feature[n][j];
-        n++;
-    }
+    /* =============== initialization  =============== */
 
-    for (i = 0; i < npoints; i++)
-        membership[i] = -1;
+    init_cluster_centers<<<choose_number_of_blocks(WARP_SIZE, nclusters), WARP_SIZE>>>(d_clusters, d_feature);
 
-    /* need to initialize new_centers_len and new_centers[0] to all 0 */
-    new_centers_len = (int *)calloc(nclusters, sizeof(int));
-
-    new_centers = (float **)malloc(nclusters * sizeof(float *));
-    new_centers[0] = (float *)calloc(nclusters * nfeatures, sizeof(float));
-    for (i = 1; i < nclusters; i++)
-        new_centers[i] = new_centers[i - 1] + nfeatures;
+    init_membership<<<choose_number_of_blocks(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_membership);
 
     do
     {
 
-        delta = 0.0;
+        /* =============== reset vars =============== */
+        reset_new_centers_len<<<choose_number_of_blocks(WARP_SIZE, nclusters), WARP_SIZE>>>(d_new_centers_len);
+        reset_new_centers<<<choose_number_of_blocks(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_new_centers);
+        reset_delta<<<1, 32>>>(d_delta);
 
-        for (i = 0; i < npoints; i++)
-        {
-            /* find the index of nestest cluster centers */
-            index = find_nearest_point(feature[i], nfeatures, clusters, nclusters);
-            /* if membership changes, increase delta by 1 */
-            if (membership[i] != index)
-                delta += 1.0;
+        assign_membership<<<choose_number_of_blocks(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_feature, d_clusters, d_membership, d_new_centers, d_new_centers_len, d_delta);
 
-            /* assign the membership to object i */
-            membership[i] = index;
+        /* =============== replace old cluster centers with new_centers and update delta =============== */
+        update_clusters<<<choose_number_of_blocks(WARP_SIZE, nclusters), WARP_SIZE>>>(d_clusters, d_new_centers, d_new_centers_len);
 
-            /* update new cluster centers : sum of objects located within */
-            new_centers_len[index]++;
-            for (j = 0; j < nfeatures; j++)
-                new_centers[index][j] += feature[i][j];
-        }
+        cudaMemcpy(&delta, d_delta, sizeof(float), cudaMemcpyDeviceToHost);
 
-        /* replace old cluster centers with new_centers */
-        for (i = 0; i < nclusters; i++)
-        {
-            for (j = 0; j < nfeatures; j++)
-            {
-                if (new_centers_len[i] > 0)
-                    clusters[i][j] = new_centers[i][j] / new_centers_len[i];
-                new_centers[i][j] = 0.0; /* set back to 0 */
-            }
-            new_centers_len[i] = 0; /* set back to 0 */
-        }
-
-        // delta /= npoints;
     } while (delta > threshold);
 
-    free(new_centers[0]);
-    free(new_centers);
-    free(new_centers_len);
+    /* =============== copy final clusters to host =============== */
+    for (i = 0; i < nclusters; i++)
+    {
+        cudaMemcpy(clusters[i], d_clusters + i * nfeatures, nfeatures * sizeof(float), cudaMemcpyDeviceToHost);
+    }
+
+    /* =============== free memory =============== */
+    cudaFree(d_membership);
+    cudaFree(d_new_centers_len);
+    cudaFree(d_feature);
+    cudaFree(d_delta);
+    cudaFree(d_clusters);
+    cudaFree(d_new_centers);
 
     return clusters;
 }
