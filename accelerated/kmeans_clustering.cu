@@ -192,7 +192,7 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
     if (tid < d_npoints)
     {
         /* find the index of nestest cluster centers */
-        index = find_nearest_point(d_feature + tid, d_nfeatures, d_clusters, d_nclusters);
+        index = find_nearest_point(d_feature + tid * d_nfeatures, d_nfeatures, d_clusters, d_nclusters);
 
         /* if membership changes, increase delta by 1 */
         if (*(d_membership + tid) != index)
@@ -247,12 +247,12 @@ float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
     float *d_clusters;    /* out: [nclusters][nfeatures] */
     float *d_new_centers; /* [nclusters][nfeatures] */
 
-    cudaMalloc((void **)d_membership, npoints * sizeof(int));
-    cudaMalloc((void **)d_new_centers_len, nclusters * sizeof(int));
-    cudaMalloc((void **)d_feature, npoints * nfeatures * sizeof(float));
-    cudaMalloc((void **)d_delta, sizeof(float));
-    cudaMalloc((void **)d_clusters, nclusters * nfeatures * sizeof(float));
-    cudaMalloc((void **)d_new_centers, nclusters * nfeatures * sizeof(float));
+    cudaMalloc((void **)&d_membership, npoints * sizeof(int));
+    cudaMalloc((void **)&d_new_centers_len, nclusters * sizeof(int));
+    cudaMalloc((void **)&d_feature, npoints * nfeatures * sizeof(float));
+    cudaMalloc((void **)&d_delta, sizeof(float));
+    cudaMalloc((void **)&d_clusters, nclusters * nfeatures * sizeof(float));
+    cudaMalloc((void **)&d_new_centers, nclusters * nfeatures * sizeof(float));
 
     cudaMemcpyToSymbol(d_nfeatures, &nfeatures, sizeof(int));
     cudaMemcpyToSymbol(d_npoints, &npoints, sizeof(int));
