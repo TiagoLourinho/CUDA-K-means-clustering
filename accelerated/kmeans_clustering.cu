@@ -196,15 +196,16 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
 
         /* if membership changes, increase delta by 1 */
         if (*(d_membership + tid) != index)
-            *d_delta += 1.0;
+            atomicAdd(d_delta, 1.0f);
 
         /* assign the membership to object i */
         *(d_membership + tid) = index;
 
         /* update new cluster centers : sum of objects located within */
-        *(d_new_centers_len + index) += 1;
+        atomicAdd(d_new_centers_len + index, 1);
+
         for (j = 0; j < d_nfeatures; j++)
-            *(d_new_centers + index * d_nfeatures + j) += *(d_feature + tid * d_nfeatures + j);
+            atomicAdd(d_new_centers + index * d_nfeatures + j, *(d_feature + tid * d_nfeatures + j));
     }
 }
 
@@ -281,11 +282,13 @@ float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
         reset_new_centers<<<choose_number_of_blocks(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_new_centers);
         reset_delta<<<1, 32>>>(d_delta);
 
+        /* =============== assign membership =============== */
         assign_membership<<<choose_number_of_blocks(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_feature, d_clusters, d_membership, d_new_centers, d_new_centers_len, d_delta);
 
         /* =============== replace old cluster centers with new_centers and update delta =============== */
         update_clusters<<<choose_number_of_blocks(WARP_SIZE, nclusters), WARP_SIZE>>>(d_clusters, d_new_centers, d_new_centers_len);
 
+        /* =============== get delta =============== */
         cudaMemcpy(&delta, d_delta, sizeof(float), cudaMemcpyDeviceToHost);
 
     } while (delta > threshold);
