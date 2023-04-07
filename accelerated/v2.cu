@@ -80,6 +80,8 @@ extern double wtime(void);
 __constant__ int d_nfeatures;
 __constant__ int d_npoints;
 __constant__ int d_nclusters;
+__constant__ int d_threshold;
+
 
 /* ==================== Host util functions ==================== */
 
@@ -189,17 +191,17 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
         index = find_nearest_point(d_feature + tid * d_nfeatures, d_nfeatures, d_clusters, d_nclusters);
 
         /* if membership changes, increase delta by 1 */
-        if (*(d_membership + tid) != index)
+        if (*d_delta < d_threshold && d_membership[tid] != index)
             atomicAdd(d_delta, 1.0f);
 
         /* assign the membership to object i */
-        *(d_membership + tid) = index;
+        d_membership[tid] = index;
 
         /* update new cluster centers : sum of objects located within */
         atomicAdd(d_new_centers_len + index, 1);
 
         for (j = 0; j < d_nfeatures; j++)
-            atomicAdd(d_new_centers + index * d_nfeatures + j, *(d_feature + tid * d_nfeatures + j));
+            atomicAdd(d_new_centers + index * d_nfeatures + j, d_feature[tid * d_nfeatures + j]);
     }
 }
 
@@ -251,6 +253,7 @@ float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
     cudaMemcpyToSymbol(d_nfeatures, &nfeatures, sizeof(int));
     cudaMemcpyToSymbol(d_npoints, &npoints, sizeof(int));
     cudaMemcpyToSymbol(d_nclusters, &nclusters, sizeof(int));
+    cudaMemcpyToSymbol(d_threshold, &threshold, sizeof(float));
 
     for (i = 0; i < npoints; i++)
         cudaMemcpy(d_feature + i * nfeatures, feature[i], nfeatures * sizeof(float), cudaMemcpyHostToDevice);
