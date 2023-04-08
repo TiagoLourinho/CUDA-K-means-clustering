@@ -80,7 +80,7 @@ extern double wtime(void);
 __constant__ int d_nfeatures;
 __constant__ int d_npoints;
 __constant__ int d_nclusters;
-__constant__ int d_threshold;
+__constant__ float d_threshold;
 
 /* ==================== Host util functions ==================== */
 
