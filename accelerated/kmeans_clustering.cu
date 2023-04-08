@@ -73,7 +73,6 @@
 #endif
 
 #define THREADS_PER_BLOCK 256
-#define WARP_SIZE 32
 
 extern double wtime(void);
 
@@ -227,7 +226,7 @@ float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
                           int *membership) /* out: [npoints] */
 {
 
-    int i, threads_per_block_clusters = WARP_SIZE;
+    int i, threads_per_block_clusters = THREADS_PER_BLOCK;
     float delta;
     float **clusters; /* out: [nclusters][nfeatures] */
 
