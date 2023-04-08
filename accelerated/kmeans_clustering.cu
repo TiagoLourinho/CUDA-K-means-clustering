@@ -227,9 +227,14 @@ float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
                           int *membership) /* out: [npoints] */
 {
 
-    int i, threads_per_block_clusters;
+    int i, threads_per_block_clusters = WARP_SIZE;
     float delta;
     float **clusters; /* out: [nclusters][nfeatures] */
+
+    if (nclusters < THREADS_PER_BLOCK)
+    {
+        threads_per_block_clusters = nclusters;
+    }
 
     /* =============== Device vars =============== */
     int *d_membership;
@@ -265,21 +270,15 @@ float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
 
     /* =============== initialization  =============== */
     init_cluster_centers<<<gridDist, blockDist>>>(d_clusters, d_feature);
-    // init_cluster_centers<<<choose_number_of_blocks(WARP_SIZE, nclusters), WARP_SIZE>>>(d_clusters, d_feature);
 
     init_membership<<<choose_number_of_blocks(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_membership);
-
-    if (nclusters < THREADS_PER_BLOCK)
-    {
-        threads_per_block_clusters = nclusters;
-    }
 
     do
     {
 
         /* =============== reset vars =============== */
         reset_new_centers_len<<<choose_number_of_blocks(THREADS_PER_BLOCK, nclusters), threads_per_block_clusters>>>(d_new_centers_len);
-        reset_new_centers<<<choose_number_of_blocks(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_new_centers);
+        reset_new_centers<<<choose_number_of_blocks(THREADS_PER_BLOCK, nfeatures * nclusters), THREADS_PER_BLOCK>>>(d_new_centers);
         reset_delta<<<1, 1>>>(d_delta);
 
         /* =============== assign membership =============== */
@@ -293,11 +292,13 @@ float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
 
     } while (delta > threshold);
 
-    /* =============== copy final clusters to host =============== */
+    /* =============== copy final results to host =============== */
     for (i = 0; i < nclusters; i++)
     {
         cudaMemcpy(clusters[i], d_clusters + i * nfeatures, nfeatures * sizeof(float), cudaMemcpyDeviceToHost);
     }
+
+    cudaMemcpy(membership, d_membership, npoints * sizeof(int), cudaMemcpyDeviceToHost);
 
     /* =============== free memory =============== */
     cudaFree(d_membership);
