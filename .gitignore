@@ -1,4 +1,5 @@
 kmeans_data/
+bin/
 *.i
 *.ii
 *.gpu
