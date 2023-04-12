@@ -29,7 +29,7 @@ def execute_command(cmd: str, cwd: str = os.path.join(".")) -> str:
     return subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True).stdout.decode()
 
 
-def get_error(host_centers: list[list], gpu_centers: list[list]) -> float:
+def get_error(host_centers: list, gpu_centers: list) -> float:
     """Returns the error of clusters centers"""
 
     error = 0
@@ -64,7 +64,7 @@ def average_runs(runs: list) -> dict:
     }
 
 
-def average_along_first_dim(data: list[list[list]]) -> list[list]:
+def average_along_first_dim(data: list) -> list:
     """Calculates the average along the first axis of a 3D list"""
 
     height, width, depth = len(data), len(data[0]), len(data[0][0])
