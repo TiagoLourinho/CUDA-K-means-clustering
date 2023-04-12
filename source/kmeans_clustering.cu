@@ -58,6 +58,7 @@
 /**					clustering.											**/
 /**                                                                     **/
 /*************************************************************************/
+// To solve linking problems
 extern "C"
 {
 #include "kmeans.h"
@@ -280,6 +281,7 @@ __global__ void divide_clusters(float *d_clusters, float *d_new_centers, int *d_
 }
 
 /*----< kmeans_clustering() >---------------------------------------------*/
+// To solve linking problems
 extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
                                      int nfeatures,
                                      int npoints,
