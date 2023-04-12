@@ -214,8 +214,28 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
 __global__ void sum_clusters(float *d_feature, int *d_membership, float *d_new_centers, int *d_new_centers_len)
 {
     int point = blockIdx.y * blockDim.y + threadIdx.y;
+    int local_point = threadIdx.y;
     int feature = blockIdx.x * blockDim.x + threadIdx.x;
+    int local_feature = threadIdx.x;
     int index;
+    float *s_new_centers;
+    int *s_new_centers_len;
+
+    extern __shared__ char shared[];
+
+    s_new_centers = (float *)shared;
+    s_new_centers_len = (int *)(shared + d_nclusters * d_nfeatures * sizeof(float));
+
+    // Init shared memory
+
+    // Only nclusters
+    if (local_feature == 0 && local_point < d_nclusters)
+        s_new_centers_len[local_point] = 0;
+
+    if (local_point < d_nclusters && local_feature < d_nfeatures)
+        s_new_centers[local_point * d_nfeatures + local_feature] = 0.0f;
+
+    __syncthreads();
 
     if (point < d_npoints && feature < d_nfeatures)
     {
@@ -223,10 +243,19 @@ __global__ void sum_clusters(float *d_feature, int *d_membership, float *d_new_c
 
         // Only 1 thread per point
         if (feature == 0)
-            atomicAdd(d_new_centers_len + index, 1);
+            atomicAdd(s_new_centers_len + index, 1);
 
-        atomicAdd(d_new_centers + index * d_nfeatures + feature, d_feature[point * d_nfeatures + feature]);
+        atomicAdd(s_new_centers + index * d_nfeatures + feature, d_feature[point * d_nfeatures + feature]);
     }
+
+    __syncthreads();
+
+    // Store in main memory
+    if (local_feature == 0 && local_point < d_nclusters)
+        atomicAdd(&d_new_centers_len[local_point], s_new_centers_len[local_point]);
+
+    if (local_point < d_nclusters && local_feature < d_nfeatures)
+        atomicAdd(&d_new_centers[local_point * d_nfeatures + local_feature], s_new_centers[local_point * d_nfeatures + local_feature]);
 }
 
 // Kernel to divide each new cluster center
@@ -307,7 +336,7 @@ float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
         assign_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK, nclusters * nfeatures * sizeof(float)>>>(d_feature, d_clusters, d_membership, d_new_centers, d_new_centers_len, d_delta);
 
         /* =============== replace old cluster centers with new_centers  =============== */
-        sum_clusters<<<points_gridDist, points_blockDist>>>(d_feature, d_membership, d_new_centers, d_new_centers_len);
+        sum_clusters<<<points_gridDist, points_blockDist, nclusters * nfeatures * sizeof(float) + nclusters * sizeof(int)>>>(d_feature, d_membership, d_new_centers, d_new_centers_len);
         divide_clusters<<<clusters_gridDist, clusters_blockDist>>>(d_clusters, d_new_centers, d_new_centers_len);
 
         /* =============== get delta =============== */
