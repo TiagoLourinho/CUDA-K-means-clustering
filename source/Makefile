@@ -4,7 +4,7 @@ HOST_CC_FLAGS = -O2
 HOST_CC_O3_FLAGS = -O3
 
 GPU_CC = nvcc
-GPU_CC_FLAGS = -O2 -Wno-deprecated-gpu-targets
+GPU_CC_FLAGS = -O2 -Wno-deprecated-gpu-targets -ccbin gcc
  
 DATA_DIR = ../kmeans_data
 BIN_DIR = ./bin
@@ -96,8 +96,8 @@ getopt_gpu.o: getopt.c
 kmeans_gpu.o: kmeans.c 
 	$(GPU_CC) $(GPU_CC_FLAGS) -c kmeans.c -o $(BIN_DIR)/kmeans_gpu.o
 
-kmeans_clustering_gpu.o: kmeans_clustering.c kmeans.h
-	$(GPU_CC) $(GPU_CC_FLAGS) -c kmeans_clustering.c -o $(BIN_DIR)/kmeans_clustering_gpu.o
+kmeans_clustering_gpu.o: kmeans_clustering.cu kmeans.h
+	$(GPU_CC) $(GPU_CC_FLAGS) -c kmeans_clustering.cu -o $(BIN_DIR)/kmeans_clustering_gpu.o
 
 clean:
 	rm -f ./bin/*
