@@ -10,8 +10,6 @@ DATA_DIR = ../kmeans_data
 BIN_DIR = ./bin
 
 
-$(shell make clean)
-$(shell mkdir -p $(BIN_DIR))
 
 compile_all: kmeans_host kmeans_host_O3 kmeans_gpu
 

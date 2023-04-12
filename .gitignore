@@ -1,5 +1,7 @@
 kmeans_data/
+results.txt
 bin/
+.vscode/
 *.i
 *.ii
 *.gpu
