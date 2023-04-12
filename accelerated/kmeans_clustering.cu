@@ -141,9 +141,29 @@ __global__ void reset_everything(int *d_new_centers_len, float *d_new_centers, f
 __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_membership, float *d_new_centers, int *d_new_centers_len, float *d_delta)
 {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int local_tid = threadIdx.x;
     int index, j, i;
     float dist, min_dist;
     float aux1, aux2;
+
+    extern __shared__ float s_clusters[];
+    extern __shared__ float s_delta;
+
+    // Load to share memory
+    if (local_tid < d_nclusters)
+    {
+        for (j = 0; j < d_nfeatures; j++)
+        {
+            s_clusters[threadIdx.x * d_nfeatures + j] = d_clusters[threadIdx.x * d_nfeatures + j];
+        }
+    }
+
+    if (local_tid == 0)
+    {
+        s_delta = *d_delta;
+    }
+
+    __syncthreads();
 
     if (tid < d_npoints)
     {
@@ -159,7 +179,7 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
             for (j = 0; j < d_nfeatures; j++)
             {
                 aux1 = d_feature[tid * d_nfeatures + j];
-                aux2 = d_clusters[i * d_nfeatures + j];
+                aux2 = s_clusters[i * d_nfeatures + j];
 
                 dist += (aux1 - aux2) * (aux1 - aux2);
             }
@@ -175,10 +195,18 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
         /* ========== find_nearest_point function end ========== */
 
         /* if membership changes, increase delta by 1 */
-        if (*d_delta < d_threshold && d_membership[tid] != index)
-            atomicAdd(d_delta, 1.0f);
+        if (s_delta < d_threshold && d_membership[tid] != index)
+            atomicAdd(&s_delta, 1.0f);
 
         d_membership[tid] = index;
+    }
+
+    __syncthreads();
+
+    // Store in main memory
+    if (local_tid == 0)
+    {
+        atomicAdd(d_delta, s_delta);
     }
 }
 
@@ -276,7 +304,7 @@ float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
         reset_everything<<<clusters_gridDist, clusters_blockDist>>>(d_new_centers_len, d_new_centers, d_delta);
 
         /* =============== assign membership =============== */
-        assign_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_feature, d_clusters, d_membership, d_new_centers, d_new_centers_len, d_delta);
+        assign_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK, nclusters * nfeatures * sizeof(float)>>>(d_feature, d_clusters, d_membership, d_new_centers, d_new_centers_len, d_delta);
 
         /* =============== replace old cluster centers with new_centers  =============== */
         sum_clusters<<<points_gridDist, points_blockDist>>>(d_feature, d_membership, d_new_centers, d_new_centers_len);
