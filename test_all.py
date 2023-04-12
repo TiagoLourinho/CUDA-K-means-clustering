@@ -26,7 +26,9 @@ def key_sort(file: str) -> int:
 
 def execute_command(cmd: str, cwd: str = os.path.join(".")) -> str:
     """Executed a command in shell and returns the output"""
-    return subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True).stdout.decode()
+    return subprocess.run(
+        cmd, shell=True, cwd=cwd, stdout=subprocess.PIPE
+    ).stdout.decode()
 
 
 def get_error(host_centers: list, gpu_centers: list) -> float:
