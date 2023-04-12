@@ -147,7 +147,7 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
     float aux1, aux2;
 
     extern __shared__ float s_clusters[];
-    extern __shared__ float s_delta;
+    __shared__ float s_delta;
 
     // Load to share memory
     if (local_tid < d_nclusters)
@@ -160,7 +160,7 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
 
     if (local_tid == 0)
     {
-        s_delta = *d_delta;
+        s_delta = 0;
     }
 
     __syncthreads();
