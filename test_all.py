@@ -111,7 +111,7 @@ def main():
     tests = sorted(os.listdir(DATA_DIR), key=key_sort)
     results = dict()
 
-    with open("results.txt", "a") as file:
+    with open("results.txt", "w") as file:
         for t in tests:
             print(f"Testing {t}")
             results[t] = {"host_time": None, "gpu_time": None, "error": None}
