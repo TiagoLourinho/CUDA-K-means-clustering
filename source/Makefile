@@ -4,7 +4,7 @@ HOST_CC_FLAGS = -O2
 HOST_CC_O3_FLAGS = -O3
 
 GPU_CC = nvcc
-GPU_CC_FLAGS = -O2 -Wno-deprecated-gpu-targets -ccbin gcc
+GPU_CC_FLAGS = -O2 -Wno-deprecated-gpu-targets 
  
 DATA_DIR = ../kmeans_data
 BIN_DIR = ./bin

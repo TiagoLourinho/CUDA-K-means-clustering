@@ -58,6 +58,10 @@
 /**					clustering.											**/
 /**                                                                     **/
 /*************************************************************************/
+extern "C"
+{
+#include "kmeans.h"
+}
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -276,12 +280,12 @@ __global__ void divide_clusters(float *d_clusters, float *d_new_centers, int *d_
 }
 
 /*----< kmeans_clustering() >---------------------------------------------*/
-float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
-                          int nfeatures,
-                          int npoints,
-                          int nclusters,
-                          float threshold,
-                          int *membership) /* out: [npoints] */
+extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures] */
+                                     int nfeatures,
+                                     int npoints,
+                                     int nclusters,
+                                     float threshold,
+                                     int *membership) /* out: [npoints] */
 {
 
     int i;
