@@ -316,13 +316,12 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
     cudaMalloc((void **)&d_clusters, nclusters * nfeatures * sizeof(float));
     cudaMalloc((void **)&d_new_centers, nclusters * nfeatures * sizeof(float));
 
-    cudaMemcpyToSymbol(d_nfeatures, &nfeatures, sizeof(int));
-    cudaMemcpyToSymbol(d_npoints, &npoints, sizeof(int));
-    cudaMemcpyToSymbol(d_nclusters, &nclusters, sizeof(int));
-    cudaMemcpyToSymbol(d_threshold, &threshold, sizeof(float));
+    cudaMemcpyToSymbolAsync(d_nfeatures, &nfeatures, sizeof(int));
+    cudaMemcpyToSymbolAsync(d_npoints, &npoints, sizeof(int));
+    cudaMemcpyToSymbolAsync(d_nclusters, &nclusters, sizeof(int));
+    cudaMemcpyToSymbolAsync(d_threshold, &threshold, sizeof(float));
 
-    for (i = 0; i < npoints; i++)
-        cudaMemcpy(d_feature + i * nfeatures, feature[i], nfeatures * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy2DAsync(d_feature, nfeatures * sizeof(float), feature[0], nfeatures * sizeof(float), nfeatures * sizeof(float), npoints, cudaMemcpyHostToDevice);
 
     /* =============== allocate space for returning variable clusters[] =============== */
     clusters = (float **)malloc(nclusters * sizeof(float *));
@@ -331,6 +330,7 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
         clusters[i] = clusters[i - 1] + nfeatures;
 
     /* =============== initialization  =============== */
+    cudaDeviceSynchronize();
     init_cluster_centers<<<clusters_gridDist, clusters_blockDist>>>(d_clusters, d_feature);
     init_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_membership);
 
@@ -353,11 +353,12 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
     /* =============== copy final results to host =============== */
     for (i = 0; i < nclusters; i++)
     {
-        cudaMemcpy(clusters[i], d_clusters + i * nfeatures, nfeatures * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpyAsync(clusters[i], d_clusters + i * nfeatures, nfeatures * sizeof(float), cudaMemcpyDeviceToHost);
     }
 
-    cudaMemcpy(membership, d_membership, npoints * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(membership, d_membership, npoints * sizeof(int), cudaMemcpyDeviceToHost);
 
+    cudaDeviceSynchronize();
     /* =============== free memory =============== */
     cudaFree(d_membership);
     cudaFree(d_new_centers_len);
