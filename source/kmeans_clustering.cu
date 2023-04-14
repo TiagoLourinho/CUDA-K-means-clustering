@@ -331,9 +331,17 @@ __global__ void divide_clusters(float *d_clusters, float *d_new_centers, int *d_
     int feature = blockIdx.x * blockDim.x + threadIdx.x;
     int len;
 
+    extern __shared__ int s_new_centers_len[];
+
+    if (feature == 0) {
+        s_new_centers_len[cluster] = d_new_centers_len[cluster];
+    }
+
+    __syncthreads();
+
     if (cluster < d_nclusters && feature < d_nfeatures)
     {
-        len = d_new_centers_len[cluster];
+        len = s_new_centers_len[cluster];
         if (len > 0)
         {
             d_clusters[cluster * d_nfeatures + feature] = d_new_centers[cluster * d_nfeatures + feature] / len;
@@ -428,7 +436,7 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
         /* =============== calculate the centers (average)  =============== */
         sum_clusters<<<points_gridDist, points_blockDist, nclusters * nfeatures * sizeof(float) + nclusters * sizeof(int)>>>(d_feature, d_membership, d_new_centers, d_new_centers_len);
         checkError(cudaGetLastError());
-        divide_clusters<<<clusters_gridDist, clusters_blockDist>>>(d_clusters, d_new_centers, d_new_centers_len);
+        divide_clusters<<<clusters_gridDist, clusters_blockDist, nclusters * sizeof(int)>>>(d_clusters, d_new_centers, d_new_centers_len);
         checkError(cudaGetLastError());
 
         checkError(cudaMemcpy(&delta, d_delta, sizeof(float), cudaMemcpyDeviceToHost)); // Also returns errors in the kernels
