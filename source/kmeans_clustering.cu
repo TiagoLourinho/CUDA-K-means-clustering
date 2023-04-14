@@ -85,6 +85,20 @@ extern "C"
 #define THREAD_LIMIT_Y 1024
 #define THREAD_LIMIT_Z 64
 
+#define checkError(ans)                       \
+    {                                         \
+        gpuAssert((ans), __FILE__, __LINE__); \
+    }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
+{
+    if (code != cudaSuccess)
+    {
+        fprintf(stderr, "Device error: %s %s %d\n", cudaGetErrorString(code), file, line);
+        if (abort)
+            exit(code);
+    }
+}
+
 extern double wtime(void);
 
 __constant__ int d_nfeatures;
@@ -122,7 +136,7 @@ __global__ void init_membership(int *d_membership)
     }
 }
 
-__global__ void reset_everything(int *d_new_centers_len, float *d_new_centers, float *d_delta)
+__global__ void reset_aux_data(int *d_new_centers_len, float *d_new_centers, float *d_delta)
 {
     int cluster = blockIdx.y * blockDim.y + threadIdx.y;
     int feature = blockIdx.x * blockDim.x + threadIdx.x;
@@ -309,44 +323,53 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
     dim3 points_gridDist(1, updiv(TOTAL_THREAD_LIMIT / nfeatures, npoints), 1);
     dim3 points_blockDist(nfeatures, TOTAL_THREAD_LIMIT / nfeatures, 1);
 
-    cudaMalloc((void **)&d_membership, npoints * sizeof(int));
-    cudaMalloc((void **)&d_new_centers_len, nclusters * sizeof(int));
-    cudaMalloc((void **)&d_feature, npoints * nfeatures * sizeof(float));
-    cudaMalloc((void **)&d_delta, sizeof(float));
-    cudaMalloc((void **)&d_clusters, nclusters * nfeatures * sizeof(float));
-    cudaMalloc((void **)&d_new_centers, nclusters * nfeatures * sizeof(float));
+    checkError(cudaMalloc((void **)&d_membership, npoints * sizeof(int)));
+    checkError(cudaMalloc((void **)&d_new_centers_len, nclusters * sizeof(int)));
+    checkError(cudaMalloc((void **)&d_feature, npoints * nfeatures * sizeof(float)));
+    checkError(cudaMalloc((void **)&d_delta, sizeof(float)));
+    checkError(cudaMalloc((void **)&d_clusters, nclusters * nfeatures * sizeof(float)));
+    checkError(cudaMalloc((void **)&d_new_centers, nclusters * nfeatures * sizeof(float)));
+
+    cudaMemcpy2DAsync(d_feature, nfeatures * sizeof(float), feature[0], nfeatures * sizeof(float), nfeatures * sizeof(float), npoints, cudaMemcpyHostToDevice);
 
     cudaMemcpyToSymbolAsync(d_nfeatures, &nfeatures, sizeof(int));
     cudaMemcpyToSymbolAsync(d_npoints, &npoints, sizeof(int));
     cudaMemcpyToSymbolAsync(d_nclusters, &nclusters, sizeof(int));
     cudaMemcpyToSymbolAsync(d_threshold, &threshold, sizeof(float));
 
-    cudaMemcpy2DAsync(d_feature, nfeatures * sizeof(float), feature[0], nfeatures * sizeof(float), nfeatures * sizeof(float), npoints, cudaMemcpyHostToDevice);
-
     /* =============== allocate space for returning variable clusters[] =============== */
     clusters = (float **)malloc(nclusters * sizeof(float *));
     clusters[0] = (float *)malloc(nclusters * nfeatures * sizeof(float));
+
+    if (clusters == NULL || clusters[0] == NULL)
+    {
+        printf("Couldn't allocate clusters, exiting.");
+        exit(1);
+    }
+
     for (i = 1; i < nclusters; i++)
         clusters[i] = clusters[i - 1] + nfeatures;
 
+    checkError(cudaDeviceSynchronize()); // Check for errors in the Async calls
+
     /* =============== initialization  =============== */
-    cudaDeviceSynchronize();
+
     init_cluster_centers<<<clusters_gridDist, clusters_blockDist>>>(d_clusters, d_feature);
     init_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_membership);
 
+    checkError(cudaDeviceSynchronize()); // Check for errors in init
+
+    /* =============== Main computation part  =============== */
     do
     {
-        reset_everything<<<clusters_gridDist, clusters_blockDist>>>(d_new_centers_len, d_new_centers, d_delta);
+        reset_aux_data<<<clusters_gridDist, clusters_blockDist>>>(d_new_centers_len, d_new_centers, d_delta);
 
-        /* =============== assign membership =============== */
         assign_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK, nclusters * nfeatures * sizeof(float)>>>(d_feature, d_clusters, d_membership, d_new_centers, d_new_centers_len, d_delta);
 
-        /* =============== replace old cluster centers with new_centers  =============== */
         sum_clusters<<<points_gridDist, points_blockDist, nclusters * nfeatures * sizeof(float) + nclusters * sizeof(int)>>>(d_feature, d_membership, d_new_centers, d_new_centers_len);
         divide_clusters<<<clusters_gridDist, clusters_blockDist>>>(d_clusters, d_new_centers, d_new_centers_len);
 
-        /* =============== get delta =============== */
-        cudaMemcpy(&delta, d_delta, sizeof(float), cudaMemcpyDeviceToHost);
+        checkError(cudaMemcpy(&delta, d_delta, sizeof(float), cudaMemcpyDeviceToHost)); // Also returns errors in the kernels
 
     } while (delta > threshold);
 
@@ -358,14 +381,15 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
 
     cudaMemcpyAsync(membership, d_membership, npoints * sizeof(int), cudaMemcpyDeviceToHost);
 
-    cudaDeviceSynchronize();
+    checkError(cudaDeviceSynchronize()); // Check for errors in the Async calls
+
     /* =============== free memory =============== */
-    cudaFree(d_membership);
-    cudaFree(d_new_centers_len);
-    cudaFree(d_feature);
-    cudaFree(d_delta);
-    cudaFree(d_clusters);
-    cudaFree(d_new_centers);
+    checkError(cudaFree(d_membership));
+    checkError(cudaFree(d_new_centers_len));
+    checkError(cudaFree(d_feature));
+    checkError(cudaFree(d_delta));
+    checkError(cudaFree(d_clusters));
+    checkError(cudaFree(d_new_centers));
 
     return clusters;
 }
