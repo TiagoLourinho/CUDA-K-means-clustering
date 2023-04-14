@@ -355,19 +355,27 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
     /* =============== initialization  =============== */
 
     init_cluster_centers<<<clusters_gridDist, clusters_blockDist>>>(d_clusters, d_feature);
-    init_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_membership);
+    checkError(cudaGetLastError());
 
-    checkError(cudaDeviceSynchronize()); // Check for errors in init
+    init_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_membership);
+    checkError(cudaGetLastError());
 
     /* =============== Main computation part  =============== */
     do
     {
+        /* =============== Set auxiliary data structures to 0  =============== */
         reset_aux_data<<<clusters_gridDist, clusters_blockDist>>>(d_new_centers_len, d_new_centers, d_delta);
+        checkError(cudaGetLastError());
 
+        /* =============== assign membership to each point  =============== */
         assign_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK, nclusters * nfeatures * sizeof(float)>>>(d_feature, d_clusters, d_membership, d_new_centers, d_new_centers_len, d_delta);
+        checkError(cudaGetLastError());
 
+        /* =============== calculate the centers (average)  =============== */
         sum_clusters<<<points_gridDist, points_blockDist, nclusters * nfeatures * sizeof(float) + nclusters * sizeof(int)>>>(d_feature, d_membership, d_new_centers, d_new_centers_len);
+        checkError(cudaGetLastError());
         divide_clusters<<<clusters_gridDist, clusters_blockDist>>>(d_clusters, d_new_centers, d_new_centers_len);
+        checkError(cudaGetLastError());
 
         checkError(cudaMemcpy(&delta, d_delta, sizeof(float), cudaMemcpyDeviceToHost)); // Also returns errors in the kernels
 
