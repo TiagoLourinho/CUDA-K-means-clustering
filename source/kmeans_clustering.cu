@@ -78,12 +78,17 @@ extern "C"
 #endif
 
 // CUDA Config
-#define THREADS_PER_BLOCK 256
+#define THREADS_PER_BLOCK 32
 #define WARP_SIZE 32
 #define TOTAL_THREAD_LIMIT 1024
+
 #define THREAD_LIMIT_X 1024
 #define THREAD_LIMIT_Y 1024
 #define THREAD_LIMIT_Z 64
+
+#define BLOCK_LIMIT_X 2147483647
+#define BLOCK_LIMIT_Y 65535
+#define BLOCK_LIMIT_Z 65535
 
 #define checkError(ans)                       \
     {                                         \
@@ -111,6 +116,40 @@ __constant__ float d_threshold;
 int updiv(int threads_per_block, int N)
 {
     return (N + threads_per_block - 1) / threads_per_block;
+}
+
+int config_check(int npoints, int nfeatures, int nclusters)
+{
+    if (nfeatures > THREAD_LIMIT_X)
+        return 1;
+
+    if (nclusters > THREAD_LIMIT_Y)
+        return 1;
+
+    if (nfeatures * nclusters > TOTAL_THREAD_LIMIT)
+        return 1;
+
+    int threads_per_block_x = TOTAL_THREAD_LIMIT / nfeatures;
+
+    if (nfeatures > THREAD_LIMIT_Y)
+        return 1;
+
+    if (threads_per_block_x > THREAD_LIMIT_X)
+        return 1;
+
+    if (nfeatures * threads_per_block_x > TOTAL_THREAD_LIMIT)
+        return 1;
+
+    if (updiv(threads_per_block_x, npoints) > BLOCK_LIMIT_X)
+        return 1;
+
+    if (updiv(THREADS_PER_BLOCK, npoints) > BLOCK_LIMIT_X)
+        return 1;
+
+    if (THREADS_PER_BLOCK > TOTAL_THREAD_LIMIT)
+        return 1;
+
+    return 0;
 }
 
 /* ==================== Init functions ==================== */
@@ -157,7 +196,7 @@ __global__ void reset_aux_data(int *d_new_centers_len, float *d_new_centers, flo
 
 /* ==================== Main computational functions ==================== */
 
-__global__ void assign_membership(float *d_feature, float *d_clusters, int *d_membership, float *d_new_centers, int *d_new_centers_len, float *d_delta)
+__global__ void assign_membership(float *d_feature, float *d_clusters, int *d_membership, float *d_new_centers, int *d_new_centers_len, float *d_delta, int optimized)
 {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int local_tid = threadIdx.x;
@@ -169,11 +208,19 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
     __shared__ float s_delta;
 
     // Load to share memory
-    if (local_tid < d_nclusters)
+    if (optimized) // Number of threads is enough to load all data (bigger than d_nclusters * d_nfeatures)
     {
-        for (j = 0; j < d_nfeatures; j++)
+        if (local_tid < d_nclusters * d_nfeatures)
+            s_clusters[local_tid] = d_clusters[local_tid];
+    }
+    else
+    {
+        if (local_tid < d_nclusters)
         {
-            s_clusters[threadIdx.x * d_nfeatures + j] = d_clusters[threadIdx.x * d_nfeatures + j];
+            for (j = 0; j < d_nfeatures; j++)
+            {
+                s_clusters[threadIdx.x * d_nfeatures + j] = d_clusters[threadIdx.x * d_nfeatures + j];
+            }
         }
     }
 
@@ -232,10 +279,10 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
 // Kernel to sum cluster centers
 __global__ void sum_clusters(float *d_feature, int *d_membership, float *d_new_centers, int *d_new_centers_len)
 {
-    int point = blockIdx.y * blockDim.y + threadIdx.y;
-    int local_point = threadIdx.y;
-    int feature = blockIdx.x * blockDim.x + threadIdx.x;
-    int local_feature = threadIdx.x;
+    int point = blockIdx.x * blockDim.x + threadIdx.x;
+    int local_point = threadIdx.x;
+    int feature = blockIdx.y * blockDim.y + threadIdx.y;
+    int local_feature = threadIdx.y;
     int index;
     float *s_new_centers;
     int *s_new_centers_len;
@@ -307,6 +354,7 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
     int i;
     float delta;
     float **clusters; /* out: [nclusters][nfeatures] */
+    int optimized = 0;
 
     /* =============== Device vars =============== */
     int *d_membership;
@@ -316,12 +364,16 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
     float *d_clusters;    /* out: [nclusters][nfeatures] */
     float *d_new_centers; /* [nclusters][nfeatures] */
 
-    // FIXME: Hardcoded, works with kdd_cup for now...
+    if (config_check(npoints, nfeatures, nclusters))
+    {
+        printf("Configuration of (npoints, nfeatures, nclusters) not currently supported (exceeds block and thread limits)\n");
+        exit(1);
+    }
     dim3 clusters_gridDist(1, 1, 1);
     dim3 clusters_blockDist(nfeatures, nclusters, 1);
 
-    dim3 points_gridDist(1, updiv(TOTAL_THREAD_LIMIT / nfeatures, npoints), 1);
-    dim3 points_blockDist(nfeatures, TOTAL_THREAD_LIMIT / nfeatures, 1);
+    dim3 points_gridDist(updiv(TOTAL_THREAD_LIMIT / nfeatures, npoints), 1, 1);
+    dim3 points_blockDist(TOTAL_THREAD_LIMIT / nfeatures, nfeatures, 1);
 
     checkError(cudaMalloc((void **)&d_membership, npoints * sizeof(int)));
     checkError(cudaMalloc((void **)&d_new_centers_len, nclusters * sizeof(int)));
@@ -360,6 +412,8 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
     init_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK>>>(d_membership);
     checkError(cudaGetLastError());
 
+    if (THREADS_PER_BLOCK >= nfeatures * nclusters)
+        optimized = 1;
     /* =============== Main computation part  =============== */
     do
     {
@@ -368,7 +422,7 @@ extern "C" float **kmeans_clustering(float **feature, /* in: [npoints][nfeatures
         checkError(cudaGetLastError());
 
         /* =============== assign membership to each point  =============== */
-        assign_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK, nclusters * nfeatures * sizeof(float)>>>(d_feature, d_clusters, d_membership, d_new_centers, d_new_centers_len, d_delta);
+        assign_membership<<<updiv(THREADS_PER_BLOCK, npoints), THREADS_PER_BLOCK, nclusters * nfeatures * sizeof(float)>>>(d_feature, d_clusters, d_membership, d_new_centers, d_new_centers_len, d_delta, optimized);
         checkError(cudaGetLastError());
 
         /* =============== calculate the centers (average)  =============== */
