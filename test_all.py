@@ -137,6 +137,11 @@ def main():
                     file.write(command + "\n")
                     file.write(output + "\n")
 
+                    if "error" in output:
+                        print(
+                            f"Error occurred while running test {t} in {turn}: {output[output.index('error:')+len('error:')+1:]}"
+                        )
+
                     runs.append(get_run_info(output))
 
                 if turn == HOST_FILE:
