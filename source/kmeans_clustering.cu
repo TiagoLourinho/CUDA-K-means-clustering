@@ -270,7 +270,7 @@ __global__ void assign_membership(float *d_feature, float *d_clusters, int *d_me
     __syncthreads();
 
     // Store in main memory
-    if (local_tid == 0)
+    if (local_tid == 0 && *d_delta < d_threshold)
     {
         atomicAdd(d_delta, s_delta);
     }
@@ -333,7 +333,8 @@ __global__ void divide_clusters(float *d_clusters, float *d_new_centers, int *d_
 
     extern __shared__ int s_new_centers_len[];
 
-    if (feature == 0) {
+    if (feature == 0)
+    {
         s_new_centers_len[cluster] = d_new_centers_len[cluster];
     }
 
