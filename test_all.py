@@ -1,14 +1,25 @@
+""" 
+Python script that makes N_RUNS per test and device, averaging the time results
+Presents a results table with times, error and obtained speedup
+
+The config parameters below should be adjusted accordingly:
+|
+|
+V
+"""
+
+
 import os
 import subprocess
 
-
+# Config parameters
 SOURCE_DIR = os.path.join("source/")
 DATA_DIR = os.path.join("kmeans_data/")
 GPU_FILE = os.path.join(SOURCE_DIR, "bin/kmeans_gpu")
 HOST_FILE = os.path.join(SOURCE_DIR, "bin/kmeans_host_O3")
 COMPILE_GPU_CMD = "make compile_gpu"
 COMPILE_HOST_CMD = "make compile_host_O3"
-N_RUNS = 2
+N_RUNS = 5
 
 
 def key_sort(file: str) -> int:
